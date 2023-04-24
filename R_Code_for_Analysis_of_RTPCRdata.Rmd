@@ -1,0 +1,258 @@
+---
+title: "RT-PCR data analysis - hypothesis testing on the existence of treatment effect"
+author: "Byungwon Kim, Johan Lim, Sungkyu Jung, Woncheol Jang"
+output: 
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: vignette
+---
+
+
+This is an R code with an example provided for analyzing an RT-PCR experiment data or other data with similar characteristics summarized as follows:
+
+1. small sample size (usually smaller than 20 including replicates)
+2. repeatedly measured observations or technical replicates from the same subject 
+3. two groups(populations) are compared - treatment group versus control group
+
+First of all, installation of the follwing R packages is required for the analysis.
+
+```{r setup, include = TRUE, echo = TRUE}
+knitr::opts_chunk$set(echo = TRUE)
+# Please run these code if you don't have these packages installed
+#install.packages("gee")
+#install.packages("gtools")
+#install.packages("tidyverse")
+#install.packages("geesmv")
+```
+
+If have them already or after the installation, please load them on your system by running the following code.
+
+* library(gee)
+* library(gtools)
+* library(tidyverse)
+* library(geesmv)
+
+```{r library setup, echo = FALSE, include = FALSE}
+library(gee)
+library(gtools)
+library(tidyverse)
+library(geesmv)
+```
+
+Now, we will define a few functions which will help us to get the results of hypothesis testing from the methods dealt in the manuscript.
+Details are provided in every function for users who are interested in learning the R code.
+If want to get just the results, please run the following code just once and skip the details.
+
+* We omit the code on this output
+* The original R markdown file contains the functions
+
+```{r functions, echo = FALSE, include = FALSE}
+Data.rearrangement <- function(data, rearrange.id, group, subject){
+  # Function for data rearrangement
+  # Data must have the variable for index of subject
+  # Input:
+  #       data - raw data frame 
+  #       rearrange.id - index for rearrangement
+  #       group - name of group variable
+  #       subject - name of subject id variable
+  # Output:
+  #       data.re - subject id variable is changed for rearrangement
+  group.id <- data[,group]
+  subject.id <- data[,subject]
+  data.order <- data[order(group.id, subject.id),]
+  data.re <- data.order[data.order[,subject] == rearrange.id[1],]
+  for (j in 2:length(rearrange.id)){
+    data.temp <- data.order[data.order[,subject] == rearrange.id[j],]
+    data.re <- rbind(data.re, data.temp)
+  }
+  data.re[,group] <- sort(group.id) 
+  return(data.re)
+}
+
+t.ind.stat = function(data, response, group){
+  # Calculates the test statistic for two-sample t-test
+  # (M1) in the manuscript
+  # Treats the replicates as independent observations
+  # Test is fixed for the alternative "greater"
+  # which means that the treatment effect is positive
+  # Input:
+  #         data - usual data frame with 3 variables (response, group, subject)
+  #         response - name of response variable
+  #         group - name of group variable
+  #                 1: treated as the treatment group
+  #                 2: treated as the control group
+  # Output:
+  #         test.stat - test statistic 
+
+  test.stat <- t.test(data[,response] ~ data[,group], equal.var = T)$statistic  
+  return(test.stat)
+}
+
+wilcoxon.stat = function(data, response, group, alternative){
+  # Calculates the test statistic for Wilcoxon's rank sum test
+  # (M2) in the manuscript
+  # Treats the replicates as independent observations
+  # Input:
+  #         data - usual data frame with 3 variables (response, group, subject)
+  #         response - name of response variable
+  #         group - name of group variable
+  #                 1: treated as the treatment group
+  #                 2: treated as the control group
+  # Output:
+  #         test.stat - test statistic 
+  
+  test.stat <- wilcox.test(data[,response] ~ data[,group])$statistic
+  return(test.stat)
+}
+
+t.avg.stat = function(data, response, subject, group){
+  # Calculates the test statistic for two-sample t-test
+  # (M3) in the manuscript
+  # Take the average of replicates from the same subject and
+  # treats those averages as independent sample
+  # Input:
+  #         data - usual data frame with 3 variables (response, group, subject)
+  #         response - name of response variable
+  #         subject - name of subject variable
+  #         group - name of group variable
+  #                 1: treated as the treatment group
+  #                 2: treated as the control group
+  # Output:
+  #         test.stat - test statistic 
+  
+  id <- data[,subject]
+  unique.id <- unique(id)
+  data.avg <- data.frame(res = rep(0, length(unique.id)),
+                         gr = rep(0, length(unique.id)))
+  names(data.avg) <- c(response, group)
+  for (j in 1:length(unique.id)){
+    data.avg[j,] <- c(mean(data[data[,subject] == unique.id[j], response]), mean(data[data[,subject] == unique.id[j], group]))
+  }
+  test.stat <- t.test(data.avg[,response] ~ data.avg[,group], equal.var = T)$statistic
+  return(test.stat)
+}
+
+GEE.stat = function(data, response, subject, group){
+  # Calculates the test statistic for GEE Wald test
+  # (M4) in the manuscript
+  # Input:
+  #         data - usual data frame with 3 variables (response, group, subject)
+  #         response - name of response variable
+  #         subject - name of subject variable
+  #         group - name of group variable
+  #                 1: treated as the treatment group
+  #                 2: treated as the control group
+  # Output:
+  #         test.stat - test statistic 
+  
+  gee.fit <- gee(data[,response] ~ data[,group],
+                 id = data[,subject],
+                 family = gaussian,
+                 corstr = "exchangeable") %>% summary()
+  test.stat <- gee.fit$coefficients[2,5]
+  if (mean( data[data[,group] == 1, response] ) - mean( data[data[,group] == 2, response] ) > 0){
+    test.stat <- abs(test.stat)
+  }else{
+    test.stat <- -abs(test.stat)
+  }
+  
+  return(test.stat)
+}
+
+Permutation.pvalue <- function(data, response, subject, group, alternative){
+  # Calculates the permutation p-values for (M1) -- (M4) in the manuscript
+  # The rule for permutation is also given in the manuscript
+  # Input:
+  #         data - usual data frame with 3 variables (response, group, subject)
+  #         response - name of response variable
+  #         subject - name of subject variable
+  #         group - name of group variable
+  #         alternative - "two.sided": treatment effect != control effect
+  #                       "greater"  : treatment effect > control effect
+  #                       "less"     : treatment effect < control effect
+  # Output:
+  #         p.values - permutation p-values for all (M1)--(M4) test statistics
+  
+  n <- length(unique(data[,subject]))
+  n1 <- length(unique(data[data[,group] == unique(data[,group])[1],subject]))
+  n2 <- length(unique(data[data[,group] == unique(data[,group])[2],subject]))
+  # permutation index
+  perm.ids = gtools::combinations(n, n1)
+  
+  # Our empirical rule says, if the sample size gives more than 2000 permutation combinations,
+  # then randomly chosen 2000 combinations would be enough for p-value calculation.
+  # Recall, permutation approach is appropriate for small sample size case.
+  if (nrow(perm.ids) > 2000){
+    perm.ids <- perm.ids[sample(nrow(perm.ids), 2000, replace = FALSE),]
+  }
+  
+  allperms_ids = apply(perm.ids, 1,  function(x){
+    c(x, (1:n)[-x])
+  }) %>% t()
+  
+  test.stat = c( t.ind.stat(data, response, group),
+                 wilcoxon.stat(data, response, group),
+                 t.avg.stat(data, response, subject, group),
+                 GEE.stat(data, response, subject, group) )
+  
+  names(test.stat) = c("t_ind", "Wilcoxon", "t_avg", "gee.wald")
+  
+  # permutation p-value
+  perm.stat <- data.frame(t_ind = rep(0, nrow(allperms_ids)),
+                          Wilcoxon = rep(0, nrow(allperms_ids)),
+                          t_avg = rep(0, nrow(allperms_ids)),
+                          gee.wald = rep(0, nrow(allperms_ids)))
+  perm.stat[1,] <- test.stat
+  for(j in 2:nrow(allperms_ids)){
+    data.re <- Data.rearrangement(data, rearrange.id = allperms_ids[j,], group, subject)
+    perm.stat[j,] <- c( t.ind.stat(data.re, response, group),
+                        wilcoxon.stat(data.re, response, group),
+                        t.avg.stat(data.re, response, subject, group),
+                        GEE.stat(data.re, response, subject, group) )
+  }
+  
+  pvalues = vector(length = length(test.stat))
+  for (j in 1:length(test.stat)){
+    if (alternative == "two.sided"){
+      pvalues[j] = 2*mean(perm.stat[,j] >= abs(test.stat[j])) 
+    }else if (alternative == "greater"){
+      pvalues[j] = mean(perm.stat[,j] >= test.stat[j]) 
+    }else if (alternative == "less"){
+      pvalues[j] = mean(perm.stat[,j] <= test.stat[j]) 
+    }else{
+      print("Not an appropriate alternative hypothesis!!")
+    }
+  }
+  return(pvalues)
+}
+```
+
+From now on, we will give a real data example. Users will be able to get the results for their own data by only importing the data they want to analyze.
+Here, we use the data in Fu et al.(2006). 
+
+```{r data example, echo = FALSE, include = FALSE}
+Fu.data <- data.frame(deltact = c(3.70, 3.36, 2.02, 2.47, 3.22, 3.28, 2.68, 1.80, 2.53, 2.58, 2.28, 2.48),
+                      sample = c(1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6),
+                      treatment = c(1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2))
+
+# Permutation p-values
+p.values.two.sided <- Permutation.pvalue(Fu.data, response = "deltact", subject = "sample", group = "treatment", alternative = "two.sided")
+p.values.one.sided <- Permutation.pvalue(Fu.data, response = "deltact", subject = "sample", group = "treatment", alternative = "greater")
+
+```
+
+```{r data table, echo = TRUE}
+print(Fu.data)
+```
+
+To get the permutation p-values, one can run the following code.
+
+* p.values <- Permutation.pvalue(Fu.data, response = "deltact", subject = "sample", group = "treatment")
+
+It provides the below p-values.
+
+```{r example result}
+print(p.values.two.sided)
+print(p.values.one.sided)
+```
+
