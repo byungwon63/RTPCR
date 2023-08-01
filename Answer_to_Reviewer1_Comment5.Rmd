@@ -1,0 +1,117 @@
+---
+title: "Answer_to_Reviewer1_Comment5"
+author: "Byungwon Kim, Johan Lim, Sungkyu Jung, Woncheol Jang"
+date: "2023-07-12"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(gee)
+library(gtools)
+library(tidyverse)
+library(geesmv)
+Fu.data <- data.frame(deltact = c(3.70, 3.36, 2.02, 2.47, 3.22, 3.28, 2.68, 1.80, 2.53, 2.58, 2.28, 2.48),
+                      sample = c(1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6),
+                      treatment = c(1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2))
+```
+
+### Fu data
+
+```{r gee, echo = TRUE}
+
+gee.fit <- gee(deltact ~ treatment, id = sample, data = Fu.data,family = gaussian, corstr = "exchangeable") %>% summary()
+gee.fit
+# ==> test statistic is
+gee.fit$coefficients[2,5]
+
+
+# Mancl and DeRouen (2001)
+gee.fit.md <- GEE.var.md(deltact ~ treatment, id = "sample", family = gaussian, data = Fu.data, corstr = "exchangeable")
+gee.fit.md
+
+# ==> test statistic is
+gee.stat.md <- gee.fit$coefficients[2,1] / sqrt(gee.fit.md$cov.beta[2])
+gee.stat.md
+
+# Fay and Graubard (2001) 
+gee.fit.fg <- GEE.var.fg(deltact ~ treatment, id = "sample", family = gaussian, data = Fu.data, corstr = "exchangeable")
+gee.fit.fg
+
+# ==> test statistic is
+gee.stat.fg <- gee.fit$coefficients[2,1] / sqrt(gee.fit.fg$cov.beta[2])
+gee.stat.fg
+
+# Morel et al. (2003)
+gee.fit.mbn <- GEE.var.mbn(deltact ~ treatment, id = "sample", family = gaussian, data = Fu.data, corstr = "exchangeable")
+gee.fit.mbn
+
+# ==> test statistic is
+gee.stat.mbn <- gee.fit$coefficients[2,1] / sqrt(gee.fit.mbn$cov.beta[2])
+gee.stat.mbn
+```
+### Simulation data
+
+```{r simulation function, echo = FALSE}
+data.generation <- function(n1, n2, nrepeat, beta0, beta1, sigmab, sigmae, err.dist = "Normal"){
+  n = n1 + n2
+  N = n * nrepeat
+  x = rbind( matrix(1,nrow = n1, ncol = nrepeat) , 
+             matrix(0,nrow = n2, ncol = nrepeat))
+  y = beta0 + beta1 * x + 
+    rnorm(n, sd = sigmab) %>% outer(rep(1, nrepeat), "*")
+  if (err.dist == "Normal"){
+    y = y + rnorm(N, sd = sigmae) %>% matrix(nrow = n)
+  }else if (err.dist == "Laplace"){
+    y = y + rlaplace(N, sigmae) %>% matrix(nrow = n)
+  }else{
+    print("The specified error distribution is not appropriate for this function!")
+    break;
+  }
+  colnames(y) = c(paste0("Rep", 1:nrepeat))
+  rownames(y) = 1:n
+  treatment = c( rep(1,n1), rep(2,n2) ) 
+  y.dat = data.frame( y = as.vector(y),
+                      treatment = rep(treatment, nrepeat),
+                      sample = rep(rownames(y), times = nrepeat))
+  return(Y = list(y, treatment, y.dat))
+}
+
+```
+
+```{r simulation data, echo = TRUE}
+Simuldata <- data.generation(n1 = 3, n2 = 3, nrepeat = 2, beta0 = 0, beta1 = 0, sigmab = 0.5, sigmae = 0.5)
+Simuldata <- Simuldata[[3]]
+
+gee.fit <- gee(y ~ treatment, id = sample, data = Simuldata,family = gaussian, corstr = "exchangeable") %>% summary()
+gee.fit
+# ==> test statistic is
+gee.fit$coefficients[2,5]
+
+
+# Mancl and DeRouen (2001)
+gee.fit.md <- GEE.var.md(y ~ treatment, id = "sample", family = gaussian, data = Simuldata, corstr = "exchangeable")
+gee.fit.md
+
+# ==> test statistic is
+gee.stat.md <- gee.fit$coefficients[2,1] / sqrt(gee.fit.md$cov.beta[2])
+gee.stat.md
+
+# Fay and Graubard (2001) 
+gee.fit.fg <- GEE.var.fg(y ~ treatment, id = "sample", family = gaussian, data = Simuldata, corstr = "exchangeable")
+gee.fit.fg
+
+# ==> test statistic is
+gee.stat.fg <- gee.fit$coefficients[2,1] / sqrt(gee.fit.fg$cov.beta[2])
+gee.stat.fg
+
+# Morel et al. (2003)
+gee.fit.mbn <- GEE.var.mbn(y ~ treatment, id = "sample", family = gaussian, data = Simuldata, corstr = "exchangeable")
+gee.fit.mbn
+
+# ==> test statistic is
+gee.stat.mbn <- gee.fit$coefficients[2,1] / sqrt(gee.fit.mbn$cov.beta[2])
+gee.stat.mbn
+
+
+```
